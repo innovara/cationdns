@@ -1,0 +1,81 @@
+# bash completion for cationdns
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026,  Manuel Fombuena <mfombuena@innovara.tech>
+
+_cationdns() {
+    local cur prev words cword
+    _init_completion || return
+
+    local commands="add update list edit delete delete_all"
+
+    # Find the subcommand and its position, skipping global option pairs
+    local cmd="" cmd_idx=0 i
+    for (( i=1; i<cword; i++ )); do
+        case "${words[$i]}" in
+            -C|--dir|-c|--config) (( i++ )) ;;
+            add|update|list|edit|delete|delete_all)
+                cmd="${words[$i]}"
+                cmd_idx=$i
+                break ;;
+        esac
+    done
+
+    # Resolve config dir (may be overridden by -C/--dir)
+    local dir="/etc/cationdns"
+    for (( i=1; i<cword; i++ )); do
+        if [[ "${words[$i]}" == "-C" || "${words[$i]}" == "--dir" ]]; then
+            dir="${words[$((i+1))]}"
+            break
+        fi
+    done
+
+    _bulk_ids() {
+        local f ids=()
+        for f in "$dir"/*.json; do
+            [[ -f "$f" ]] && ids+=( "$(basename "$f" .json)" )
+        done
+        echo "${ids[@]}"
+    }
+
+    # Complete arguments to the previous word
+    case "$prev" in
+        -C|--dir)    _filedir -d; return ;;
+        -c|--config) _filedir;    return ;;
+        -D|--description|-d|--domain) return ;;
+        -p|--protocols)
+            COMPREPLY=( $(compgen -W "ipv4 ipv6" -- "$cur") )
+            return ;;
+    esac
+
+    # No subcommand yet — complete commands and global options
+    if [[ -z "$cmd" ]]; then
+        COMPREPLY=( $(compgen -W "$commands -C --dir -c --config" -- "$cur") )
+        return
+    fi
+
+    case "$cmd" in
+        add)
+            COMPREPLY=( $(compgen -W "-D --description -d --domain -p --protocols" -- "$cur") )
+            ;;
+        update)
+            COMPREPLY=( $(compgen -W "-f --force $(_bulk_ids)" -- "$cur") )
+            ;;
+        list|delete_all)
+            COMPREPLY=()
+            ;;
+        edit)
+            # First positional after 'edit' is the bulkId
+            if (( cword - cmd_idx == 1 )); then
+                COMPREPLY=( $(compgen -W "$(_bulk_ids)" -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W "-D --description -d --domain -p --protocols" -- "$cur") )
+            fi
+            ;;
+        delete)
+            COMPREPLY=( $(compgen -W "$(_bulk_ids)" -- "$cur") )
+            ;;
+    esac
+}
+
+complete -F _cationdns cationdns

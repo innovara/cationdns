@@ -1,0 +1,308 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026,  Manuel Fombuena <mfombuena@innovara.tech>
+#
+
+VERSION="1.0"
+
+API="https://api.hosting.ionos.com/dns/v1/dyndns"
+CATIONDNS_DIR="/etc/cationdns"
+STATE_FILE="/var/run/cationdns_state"
+
+pre_parse() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -C|--dir)    shift; CATIONDNS_DIR="$1" ;;
+            -c|--config) shift; CONF_FILE="$1" ;;
+            *) break ;;
+        esac
+        shift
+    done
+}
+pre_parse "$@"
+
+CONF_FILE="${CONF_FILE:-${CATIONDNS_DIR}/cationdns.conf}"
+
+if [ ! -f "$CONF_FILE" ]; then
+    echo "Error: config file $CONF_FILE not found"
+    exit 1
+fi
+. "$CONF_FILE"
+
+[ -z "$PREFIX" ] && { echo "Error: PREFIX not set in $CONF_FILE"; exit 1; }
+[ -z "$SECRET" ] && { echo "Error: SECRET not set in $CONF_FILE"; exit 1; }
+
+# get_protocols <file>
+# Returns space-separated protocols from JSON file.
+# Defaults to "ipv4 ipv6" if field is absent.
+get_protocols() {
+    local file="$1"
+    local raw
+    raw=$(grep -o '"protocols":\[[^]]*\]' "$file" | sed 's/"protocols":\[//;s/\]//;s/"//g;s/,/ /g')
+    if [ -z "$raw" ]; then
+        echo "ipv4 ipv6"
+    else
+        echo "$raw"
+    fi
+}
+
+# has_protocol <protocols_string> <protocol>
+has_protocol() {
+    echo "$1" | grep -qw "$2"
+}
+
+# protocols_to_json <protocols_string>
+# Converts space-separated protocols to JSON array string e.g. ["ipv4","ipv6"]
+protocols_to_json() {
+    local result=""
+    for p in $1; do
+        [ -n "$result" ] && result="${result},"
+        result="${result}\"${p}\""
+    done
+    echo "[${result}]"
+}
+
+api_call() {
+    # api_call <method> <url> [body]
+    method="$1"
+    url="$2"
+    body="$3"
+
+    tmp=$(mktemp)
+    if [ -n "$body" ]; then
+        http_code=$(curl -s -o "$tmp" -w "%{http_code}" -X "$method" \
+            "$url" \
+            -H "accept: application/json" \
+            -H "X-API-Key: ${PREFIX}.${SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "$body")
+    else
+        http_code=$(curl -s -o "$tmp" -w "%{http_code}" -X "$method" \
+            "$url" \
+            -H "accept: application/json" \
+            -H "X-API-Key: ${PREFIX}.${SECRET}")
+    fi
+
+    if [ "$http_code" != "200" ]; then
+        echo "Error: API returned HTTP $http_code" >&2
+        cat "$tmp" >&2
+        echo >&2
+        rm -f "$tmp"
+        exit 1
+    fi
+    cat "$tmp"
+    rm -f "$tmp"
+}
+
+parse_domains_args() {
+    description=""
+    domains_json=""
+    domain_count=0
+    protocols=""
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --description|-D)
+                shift; description="$1" ;;
+            --domain|-d)
+                shift
+                [ -n "$domains_json" ] && domains_json="${domains_json}, "
+                domains_json="${domains_json}\"$1\""
+                domain_count=$((domain_count + 1))
+                ;;
+            --protocols|-p)
+                shift; protocols="$1" ;;
+            *) echo "Error: unknown option '$1'"; usage; exit 1 ;;
+        esac
+        shift
+    done
+
+    [ -z "$description" ] && { echo "Error: --description is required"; usage; exit 1; }
+    [ "$domain_count" -eq 0 ] && { echo "Error: at least one --domain is required"; usage; exit 1; }
+}
+
+add() {
+    parse_domains_args "$@"
+    response=$(api_call "POST" "$API" "{\"domains\": [${domains_json}], \"description\": \"${description}\"}")
+    [ $? -ne 0 ] && exit 1
+    bulk_id=$(printf '%s' "$response" | grep -o '"bulkId":"[^"]*"' | cut -d'"' -f4)
+    [ -z "$bulk_id" ] && { echo "Error: bulkId not found in response" >&2; exit 1; }
+    json_file="${CATIONDNS_DIR}/${bulk_id}.json"
+    # Build local JSON, always including protocols field
+    [ -z "$protocols" ] && protocols="ipv4 ipv6"
+    printf '{"bulkId":"%s","updateUrl":"%s","domains":[%s],"description":"%s","protocols":%s}\n' \
+        "$bulk_id" \
+        "$(printf '%s' "$response" | grep -o '"updateUrl":"[^"]*"' | cut -d'"' -f4)" \
+        "$domains_json" "$description" \
+        "$(protocols_to_json "$protocols")" \
+        > "$json_file"
+    chmod 600 "$json_file"
+    cat "$json_file"
+}
+
+update_entry() {
+    # update_entry <bulk_id> <update_url> <protocols> [force]
+    bulk_id="$1"
+    update_url="$2"
+    protocols="$3"
+    force="$4"
+
+    if [ "$force" = "1" ]; then
+        tmp=$(mktemp)
+        grep -v "^${bulk_id}\." "$STATE_FILE" 2>/dev/null > "$tmp"
+        mv "$tmp" "$STATE_FILE"
+    fi
+
+    IPV4=""
+    IPV6=""
+    LAST_V4=$(grep "^${bulk_id}\.v4=" "$STATE_FILE" 2>/dev/null | cut -d= -f2)
+    LAST_V6=$(grep "^${bulk_id}\.v6=" "$STATE_FILE" 2>/dev/null | cut -d= -f2)
+
+    has_protocol "$protocols" "ipv4" && IPV4=$(curl -s http://ipv4.icanhazip.com)
+    has_protocol "$protocols" "ipv6" && IPV6=$(curl -s http://ipv6.icanhazip.com)
+
+    PARAMS=""
+    [ -n "$IPV4" ] && [ "$IPV4" != "$LAST_V4" ] && PARAMS="${PARAMS}&ipv4=${IPV4}"
+    [ -n "$IPV6" ] && [ "$IPV6" != "$LAST_V6" ] && PARAMS="${PARAMS}&ipv6=${IPV6}"
+
+    if [ -n "$PARAMS" ]; then
+        curl -s "${update_url}${PARAMS}"
+        tmp=$(mktemp)
+        grep -v "^${bulk_id}\." "$STATE_FILE" 2>/dev/null > "$tmp"
+        [ -n "$IPV4" ] && printf '%s.v4=%s\n' "$bulk_id" "$IPV4" >> "$tmp"
+        [ -n "$IPV6" ] && printf '%s.v6=%s\n' "$bulk_id" "$IPV6" >> "$tmp"
+        mv "$tmp" "$STATE_FILE"
+    else
+        echo "IPs unchanged, no update needed"
+    fi
+}
+
+update() {
+    FORCE=0
+    TARGET=""
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -f|--force) FORCE=1 ;;
+            *)          TARGET="$1" ;;
+        esac
+        shift
+    done
+
+    if [ -n "$TARGET" ]; then
+        file="${CATIONDNS_DIR}/${TARGET}.json"
+        [ ! -f "$file" ] && { echo "Error: $file not found"; exit 1; }
+        update_url=$(grep -o '"updateUrl":"[^"]*"' "$file" | cut -d'"' -f4)
+        [ -z "$update_url" ] && { echo "Error: updateUrl not found in $file" >&2; exit 1; }
+        protocols=$(get_protocols "$file")
+        update_entry "$TARGET" "$update_url" "$protocols" "$FORCE"
+    else
+        if [ "$FORCE" = "1" ]; then
+            rm -f "$STATE_FILE"
+        fi
+        set -- "${CATIONDNS_DIR}"/*.json
+        [ ! -f "$1" ] && { echo "Error: no entries found, run add first"; exit 1; }
+        for file; do
+            bulk_id=$(grep -o '"bulkId":"[^"]*"' "$file" | cut -d'"' -f4)
+            update_url=$(grep -o '"updateUrl":"[^"]*"' "$file" | cut -d'"' -f4)
+            [ -z "$update_url" ] && { echo "Warning: updateUrl not found in $file, skipping" >&2; continue; }
+            protocols=$(get_protocols "$file")
+            update_entry "$bulk_id" "$update_url" "$protocols" 0
+        done
+    fi
+}
+
+list() {
+    set -- "${CATIONDNS_DIR}"/*.json
+    if [ ! -f "$1" ]; then
+        echo "No entries found."
+        return
+    fi
+    printf "%-36s  %-30s  %-16s  %s\n" "BULK ID" "DESCRIPTION" "PROTOCOLS" "DOMAINS"
+    printf "%-36s  %-30s  %-16s  %s\n" "------------------------------------" "------------------------------" "----------------" "-------"
+    for file; do
+        bulk_id=$(grep -o '"bulkId":"[^"]*"' "$file" | cut -d'"' -f4)
+        description=$(grep -o '"description":"[^"]*"' "$file" | cut -d'"' -f4)
+        protocols=$(get_protocols "$file")
+        domains=$(grep -o '"domains":\[[^]]*\]' "$file" | sed 's/"domains":\[//;s/\]//;s/"//g')
+        printf "%-36s  %-30s  %-16s  %s\n" "$bulk_id" "$description" "$protocols" "$domains"
+    done
+}
+
+edit() {
+    [ -z "$1" ] && { echo "Error: bulkId required"; usage; exit 1; }
+    bulk_id="$1"
+    shift
+    file="${CATIONDNS_DIR}/${bulk_id}.json"
+    [ ! -f "$file" ] && { echo "Error: $file not found"; exit 1; }
+    update_url=$(grep -o '"updateUrl":"[^"]*"' "$file" | cut -d'"' -f4)
+
+    parse_domains_args "$@"
+
+    api_call "PUT" "${API}/${bulk_id}" "{\"domains\": [${domains_json}], \"description\": \"${description}\"}" > /dev/null
+
+    if [ -z "$protocols" ]; then
+        protocols=$(get_protocols "$file")
+    fi
+    printf '{"bulkId":"%s","updateUrl":"%s","domains":[%s],"description":"%s","protocols":%s}\n' \
+        "$bulk_id" "$update_url" "$domains_json" "$description" \
+        "$(protocols_to_json "$protocols")" > "$file"
+
+    tmp=$(mktemp)
+    grep -v "^${bulk_id}\." "$STATE_FILE" 2>/dev/null > "$tmp"
+    mv "$tmp" "$STATE_FILE"
+}
+
+delete() {
+    [ -z "$1" ] && { echo "Error: bulkId required"; usage; exit 1; }
+    bulk_id="$1"
+    file="${CATIONDNS_DIR}/${bulk_id}.json"
+    [ ! -f "$file" ] && { echo "Error: $file not found"; exit 1; }
+
+    api_call "DELETE" "${API}/${bulk_id}" > /dev/null
+    rm -f "$file"
+}
+
+delete_all() {
+    api_call "DELETE" "$API" > /dev/null
+    rm -f "${CATIONDNS_DIR}"/*.json "$STATE_FILE"
+}
+
+usage() {
+    echo "Usage: $0 [global options] <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  add  (-D|--description) <desc> (-d|--domain) <domain> [(-d|--domain) <domain> ...] [(-p|--protocols) \"ipv4 ipv6\"]"
+    echo "  update [-f|--force] [<bulkId>]"
+    echo "  list"
+    echo "  edit   <bulkId> (-D|--description) <desc> (-d|--domain) <domain> [(-d|--domain) <domain> ...] [(-p|--protocols) \"ipv4 ipv6\"]"
+    echo "  delete <bulkId>"
+    echo "  delete_all"
+    echo ""
+    echo "Global options:"
+    echo "  -V, --version          Print version and exit"
+    echo "  -C, --dir     <dir>    Config directory (default: /etc/cationdns)"
+    echo "  -c, --config  <file>   Config file (default: <dir>/cationdns.conf)"
+    echo ""
+    echo "Protocols:"
+    echo "  Default (field absent): both ipv4 and ipv6"
+    echo "  -p \"ipv4\"       IPv4 only"
+    echo "  -p \"ipv6\"       IPv6 only"
+    echo "  -p \"ipv4 ipv6\" Both (explicit)"
+    echo ""
+    echo "Config file: $CONF_FILE"
+    echo "  Required: PREFIX, SECRET"
+    echo "  Optional: STATE_FILE (default: /var/run/cationdns_state)"
+}
+
+case "$1" in
+    -V|--version) echo "cationdns $VERSION" ;;
+    add)        shift; add "$@" ;;
+    update)     shift; update "$@" ;;
+    list)       list ;;
+    edit)       shift; edit "$@" ;;
+    delete)     shift; delete "$@" ;;
+    delete_all) delete_all ;;
+    *)          usage; exit 1 ;;
+esac

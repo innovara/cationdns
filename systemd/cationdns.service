@@ -1,0 +1,15 @@
+[Unit]
+Description=cationdns Dynamic DNS update
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/cationdns/cationdns.conf
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30
+KillMode=control-group
+User=root
+Group=root
+RemainAfterExit=no
+ExecStart=/usr/bin/cationdns update
+LogLevelMax=notice

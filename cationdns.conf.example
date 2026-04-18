@@ -1,0 +1,16 @@
+# cationdns configuration file
+#
+# SECURITY: This file contains sensitive credentials.
+# If you copied it manually, restrict its access to the user
+# running cantiondns. For example:
+#   chown root:root /etc/cationdns/cationdns.conf
+#   chmod 600 /etc/cationdns/cationdns.conf
+
+# IONOS Developer API credentials (required)
+# Create a Hosting API key in your IONOS Developer API Portal
+PREFIX="your_prefix_here"
+SECRET="your_secret_here"
+
+# Optional overrides
+#CATIONDNS_DIR="/etc/cationdns"
+#STATE_FILE="/var/run/cationdns_state"
