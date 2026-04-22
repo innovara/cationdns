@@ -21,6 +21,14 @@ Edit `/etc/cationdns/cationdns.conf` and fill in your IONOS API credentials. You
 
 > **Note:** This uses the IONOS Hosting API, not the IONOS Cloud API.
 
+The following optional settings are also available:
+
+| Setting | Description |
+|---|---|
+| `CATIONDNS_DIR` | Config directory (default: `/etc/cationdns`) |
+| `STATE_FILE` | Path to the state file (default: `/var/run/cationdns_state`) |
+| `UPDATE_INTERVAL` | Force an IP update every N seconds regardless of whether the IP has changed. Useful to refresh records before the TTL expires. Set to `0` or leave unset to disable. |
+
 ## Usage
 
 > **First time?** Start with `add` to register your domains and generate the update URL. Once that's done, run `update` to push your current IP. From then on, `update` is the only command you need to run regularly.
@@ -84,7 +92,7 @@ cationdns edit <bulkId> (-D|--description) <desc> (-d|--domain) <domain> [(-d|--
 
 ### Delete a Dynamic DNS entry
 
-Removes the entry from IONOS and cleans up local configuration. The DNS records themselves are not deleted.
+Removes the entry from IONOS, deletes the associated A and AAAA DNS records, and cleans up local configuration.
 
 ```sh
 cationdns delete <bulkId>
