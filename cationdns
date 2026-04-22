@@ -262,6 +262,9 @@ delete() {
 
     api_call "DELETE" "${API}/${bulk_id}" > /dev/null
     rm -f "$file"
+    tmp=$(mktemp)
+    grep -v "^${bulk_id}\." "$STATE_FILE" 2>/dev/null > "$tmp"
+    mv "$tmp" "$STATE_FILE"
 }
 
 delete_all() {
