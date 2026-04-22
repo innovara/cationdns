@@ -7,6 +7,7 @@
 VERSION="1.0"
 
 API="https://api.hosting.ionos.com/dns/v1/dyndns"
+ZONES_API="https://api.hosting.ionos.com/dns/v1/zones"
 CATIONDNS_DIR="/etc/cationdns"
 STATE_FILE="/var/run/cationdns_state"
 
@@ -254,17 +255,53 @@ edit() {
     mv "$tmp" "$STATE_FILE"
 }
 
+delete_domain_records() {
+    domain="$1"
+    zones=$(api_call "GET" "$ZONES_API")
+    zone_id=""
+    while IFS= read -r zone_line; do
+        [ -z "$zone_line" ] && continue
+        zid=$(echo "$zone_line" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+        zname=$(echo "$zone_line" | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
+        case "$domain" in
+            "$zname"|*."$zname")
+                zone_id="$zid"
+                break
+                ;;
+        esac
+    done <<ZONES_EOF
+$(echo "$zones" | tr '{}' '\n' | grep '"id"')
+ZONES_EOF
+    if [ -z "$zone_id" ]; then
+        echo "Warning: no zone found for domain $domain, skipping record deletion" >&2
+        return
+    fi
+    zone_data=$(api_call "GET" "${ZONES_API}/${zone_id}?recordName=${domain}&recordType=A,AAAA")
+    record_ids=$(echo "$zone_data" | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | tail -n +2)
+    for record_id in $record_ids; do
+        current=$(api_call "GET" "${ZONES_API}/${zone_id}?recordName=${domain}&recordType=A,AAAA")
+        echo "$current" | grep -q "\"${record_id}\"" || continue
+        api_call "DELETE" "${ZONES_API}/${zone_id}/records/${record_id}" > /dev/null
+    done
+}
+
 delete() {
     [ -z "$1" ] && { echo "Error: bulkId required"; usage; exit 1; }
     bulk_id="$1"
     file="${CATIONDNS_DIR}/${bulk_id}.json"
     [ ! -f "$file" ] && { echo "Error: $file not found"; exit 1; }
 
+    domains=$(grep -o '"domains":\[[^]]*\]' "$file" | sed 's/"domains":\[//;s/\]//;s/"//g;s/,/ /g')
+
     api_call "DELETE" "${API}/${bulk_id}" > /dev/null
     rm -f "$file"
     tmp=$(mktemp)
     grep -v "^${bulk_id}\." "$STATE_FILE" 2>/dev/null > "$tmp"
     mv "$tmp" "$STATE_FILE"
+
+    for domain in $domains; do
+        delete_domain_records "$domain"
+    done
 }
 
 delete_all() {
