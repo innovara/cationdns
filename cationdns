@@ -4,7 +4,7 @@
 # Copyright (C) 2026,  Manuel Fombuena <mfombuena@innovara.tech>
 #
 
-VERSION="1.0"
+VERSION="1.1"
 
 API="https://api.hosting.ionos.com/dns/v1/dyndns"
 ZONES_API="https://api.hosting.ionos.com/dns/v1/zones"

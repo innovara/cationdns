@@ -1,5 +1,5 @@
 Name:           cationdns
-Version:        1.0
+Version:        1.1
 Release:        1%{?dist}
 Summary:        Lightweight Dynamic DNS client for the IONOS Hosting API
 BuildArch:      noarch
@@ -69,5 +69,10 @@ fi
 
 
 %changelog
+* Thu Apr 23 2026 Manuel Fombuena <mfombuena@innovara.tech> - 1.1-1
+- Delete associated A and AAAA DNS records when deleting a bulk entry
+- Periodically force IP updates via UPDATE_INTERVAL setting
+- Fix stale state entries not removed on bulkid entry deletion
+
 * Sat Apr 18 2026 Manuel Fombuena <mfombuena@innovara.tech> - 1.0-1
 - First version packaged
