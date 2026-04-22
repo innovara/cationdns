@@ -14,3 +14,7 @@ SECRET="your_secret_here"
 # Optional overrides
 #CATIONDNS_DIR="/etc/cationdns"
 #STATE_FILE="/var/run/cationdns_state"
+
+# Force an IP update every N seconds regardless of whether the IP has changed.
+# Set to 0 or leave unset to disable.
+#UPDATE_INTERVAL=0

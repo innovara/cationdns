@@ -149,6 +149,14 @@ update_entry() {
     protocols="$3"
     force="$4"
 
+    if [ "$force" != "1" ] && [ -n "$UPDATE_INTERVAL" ] && [ "$UPDATE_INTERVAL" -gt 0 ]; then
+        last_update=$(grep "^${bulk_id}\.last_update=" "$STATE_FILE" 2>/dev/null | cut -d= -f2)
+        now=$(date +%s)
+        if [ -z "$last_update" ] || [ "$((now - last_update))" -ge "$UPDATE_INTERVAL" ]; then
+            force="1"
+        fi
+    fi
+
     if [ "$force" = "1" ]; then
         tmp=$(mktemp)
         grep -v "^${bulk_id}\." "$STATE_FILE" 2>/dev/null > "$tmp"
@@ -169,13 +177,22 @@ update_entry() {
 
     if [ -n "$PARAMS" ]; then
         curl -s "${update_url}${PARAMS}"
+        [ -z "$now" ] && now=$(date +%s)
         tmp=$(mktemp)
         grep -v "^${bulk_id}\." "$STATE_FILE" 2>/dev/null > "$tmp"
         [ -n "$IPV4" ] && printf '%s.v4=%s\n' "$bulk_id" "$IPV4" >> "$tmp"
         [ -n "$IPV6" ] && printf '%s.v6=%s\n' "$bulk_id" "$IPV6" >> "$tmp"
+        printf '%s.last_update=%s\n' "$bulk_id" "$now" >> "$tmp"
         mv "$tmp" "$STATE_FILE"
     else
         echo "IPs unchanged, no update needed"
+        if [ "$force" = "1" ]; then
+            [ -z "$now" ] && now=$(date +%s)
+            tmp=$(mktemp)
+            grep -v "^${bulk_id}\.last_update=" "$STATE_FILE" 2>/dev/null > "$tmp"
+            printf '%s.last_update=%s\n' "$bulk_id" "$now" >> "$tmp"
+            mv "$tmp" "$STATE_FILE"
+        fi
     fi
 }
 
@@ -209,7 +226,7 @@ update() {
             update_url=$(grep -o '"updateUrl":"[^"]*"' "$file" | cut -d'"' -f4)
             [ -z "$update_url" ] && { echo "Warning: updateUrl not found in $file, skipping" >&2; continue; }
             protocols=$(get_protocols "$file")
-            update_entry "$bulk_id" "$update_url" "$protocols" 0
+            update_entry "$bulk_id" "$update_url" "$protocols" "$FORCE"
         done
     fi
 }
