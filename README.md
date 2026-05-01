@@ -9,11 +9,22 @@ A lightweight Dynamic DNS client for the IONOS Hosting API, written in POSIX she
 
 ## Installation
 
+### Manual
+
 ```sh
 sudo ./install.sh
 ```
 
 This installs `cationdns` to `/usr/local/bin` and copies `cationdns.conf.example` to `/etc/cationdns/cationdns.conf` (skipped if a config file already exists).
+
+### RPM (Fedora and EPEL-compatible distros)
+
+RPM packages are available in the [mandolin/innovara](https://copr.fedorainfracloud.org/coprs/mandolin/innovara/) Copr repository:
+
+```sh
+sudo dnf copr enable mandolin/innovara
+sudo dnf install cationdns
+```
 
 ## Configuration
 
